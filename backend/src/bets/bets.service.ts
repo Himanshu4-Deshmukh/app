@@ -1,6 +1,6 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { Model, Types, ClientSession } from 'mongoose';
 import { Bet, BetDocument } from './schemas/bet.schema';
 import { CreateBetDto } from './dto/create-bet.dto';
 import { WalletService } from '../wallet/wallet.service';
@@ -8,15 +8,50 @@ import { BetStatus, TransactionType, SlotStatus } from '../common/enums';
 
 @Injectable()
 export class BetsService {
+  private readonly logger = new Logger(BetsService.name);
+
   constructor(
     @InjectModel(Bet.name) private betModel: Model<BetDocument>,
     private walletService: WalletService,
   ) {}
 
+  private async executeInTransaction<T>(
+    operation: (session: ClientSession | null) => Promise<T>,
+  ): Promise<T> {
+    const session = await this.betModel.db.startSession();
+    let transactionStarted = false;
+
+    try {
+      session.startTransaction();
+      transactionStarted = true;
+      
+      const result = await operation(session);
+      
+      await session.commitTransaction();
+      return result;
+    } catch (error) {
+      if (transactionStarted) {
+        await session.abortTransaction();
+      }
+
+      // Check for "Transaction numbers are only allowed on a replica set member or mongos"
+      // Error code 20 is IllegalOperation, but relying on message is safer for this specific case
+      if (error.message && error.message.includes('Transaction numbers are only allowed on a replica set member')) {
+        this.logger.warn('MongoDB Standalone confirmed. Retrying operation without transaction.');
+        return operation(null);
+      }
+
+      throw error;
+    } finally {
+      session.endSession();
+    }
+  }
+
   async create(userId: string, createBetDto: CreateBetDto): Promise<BetDocument> {
+    return this.executeInTransaction(async (session) => {
     const { Slot } = require('../slots/schemas/slot.schema');
     const slotModel = this.betModel.db.model('Slot');
-    const slot = await slotModel.findById(createBetDto.slotId);
+    const slot = await slotModel.findById(createBetDto.slotId).session(session);
 
     if (!slot) {
       throw new NotFoundException('Slot not found');
@@ -33,7 +68,13 @@ export class BetsService {
 
     const betAmount = slot.betAmount || 10;
 
-    await this.walletService.debit(userId, betAmount, TransactionType.BET, createBetDto.slotId);
+    await this.walletService.debit(
+        userId, 
+        betAmount, 
+        TransactionType.BET, 
+        createBetDto.slotId, 
+        session
+      );
 
     const bet = new this.betModel({
       slotId: new Types.ObjectId(createBetDto.slotId),
@@ -43,7 +84,8 @@ export class BetsService {
       status: BetStatus.PENDING,
     });
 
-    return bet.save();
+      return bet.save({ session });
+    });
   }
 
   async getUserBets(userId: string): Promise<BetDocument[]> {
@@ -75,7 +117,8 @@ export class BetsService {
   }
 
   async processSlotResults(slotId: string, winningNumber: number, winAmount: number): Promise<void> {
-    const bets = await this.getSlotBets(slotId);
+    return this.executeInTransaction(async (session) => {
+      const bets = await this.betModel.find({ slotId: new Types.ObjectId(slotId) }).session(session);
 
     for (const bet of bets) {
       if (bet.number === winningNumber) {
@@ -85,12 +128,14 @@ export class BetsService {
           winAmount,
           TransactionType.WIN,
           slotId,
+          session,
         );
       } else {
         bet.status = BetStatus.LOST;
       }
-      await bet.save();
+      await bet.save({ session });
     }
+  });
   }
 
   async getAllBets(): Promise<BetDocument[]> {

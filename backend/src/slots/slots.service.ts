@@ -38,11 +38,26 @@ export class SlotsService {
 
   async getActiveSlot(): Promise<SlotDocument | null> {
     const now = new Date();
-    return this.slotModel.findOne({
+    const slot = await this.slotModel.findOne({
       status: SlotStatus.OPEN,
       startTime: { $lte: now },
       endTime: { $gte: now },
     });
+
+    if (!slot) {
+      // Logic: If no active slot found, let's log potential candidates to see why they failed
+      //console.log(`No active slot found. Now: ${now.toISOString()}`);
+      /*
+      const openSlots = await this.slotModel.find({ status: SlotStatus.OPEN });
+      openSlots.forEach(s => {
+        const start = new Date(s.startTime);
+        const end = new Date(s.endTime);
+        //console.log(`Slot ${s._id}: Start=${start.toISOString()}, End=${end.toISOString()} | Matches? ${start <= now && end >= now}`);
+      });
+      */
+    }
+
+    return slot;
   }
 
   async setWinningNumber(slotId: string, dto: SetWinningNumberDto): Promise<SlotDocument> {

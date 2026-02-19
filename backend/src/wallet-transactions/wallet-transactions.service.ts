@@ -11,12 +11,12 @@ export class WalletTransactionsService {
     private transactionModel: Model<WalletTransactionDocument>,
   ) {}
 
-  async create(createTransactionDto: CreateTransactionDto): Promise<WalletTransactionDocument> {
+  async create(createTransactionDto: CreateTransactionDto, session?: any): Promise<WalletTransactionDocument> {
     const transaction = new this.transactionModel({
       ...createTransactionDto,
       userId: new Types.ObjectId(createTransactionDto.userId),
     });
-    return transaction.save();
+    return transaction.save({ session });
   }
 
   async getUserTransactions(userId: string): Promise<WalletTransactionDocument[]> {

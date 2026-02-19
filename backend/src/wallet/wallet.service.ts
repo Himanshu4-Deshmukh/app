@@ -33,22 +33,27 @@ export class WalletService {
     amount: number,
     type: TransactionType,
     referenceId?: string,
+    session?: any,
   ): Promise<WalletDocument> {
-    const wallet = await this.getWallet(userId);
+    const wallet = await this.walletModel.findOne({ userId: new Types.ObjectId(userId) }).session(session);
+
+    if (!wallet) {
+      throw new NotFoundException('Wallet not found'); 
+    }
 
     if (wallet.balance < amount) {
       throw new BadRequestException('Insufficient balance');
     }
 
     wallet.balance -= amount;
-    await wallet.save();
+    await wallet.save({ session });
 
     await this.walletTransactionsService.create({
       userId,
       amount: -amount,
       type,
       referenceId,
-    });
+    }, session);
 
     return wallet;
   }
@@ -58,18 +63,23 @@ export class WalletService {
     amount: number,
     type: TransactionType,
     referenceId?: string,
+    session?: any,
   ): Promise<WalletDocument> {
-    const wallet = await this.getWallet(userId);
+    const wallet = await this.walletModel.findOne({ userId: new Types.ObjectId(userId) }).session(session);
+
+    if (!wallet) {
+       throw new NotFoundException('Wallet not found'); 
+    }
 
     wallet.balance += amount;
-    await wallet.save();
+    await wallet.save({ session });
 
     await this.walletTransactionsService.create({
       userId,
       amount,
       type,
       referenceId,
-    });
+    }, session);
 
     return wallet;
   }
